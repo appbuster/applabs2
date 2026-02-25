@@ -378,6 +378,9 @@ export default function Home() {
                 <div className={`flex items-center gap-2 ${statusColors[currentJob.status]}`}>
                   {statusIcons[currentJob.status]}
                   <span className="capitalize font-medium">{currentJob.status}</span>
+                  {currentJob.progress?.percentage != null && !['complete', 'failed', 'cancelled'].includes(currentJob.status) && (
+                    <span className="text-gray-400 font-normal">({currentJob.progress.percentage}%)</span>
+                  )}
                 </div>
                 {/* Action buttons */}
                 {!['complete', 'failed', 'cancelled'].includes(currentJob.status) && (
@@ -405,18 +408,11 @@ export default function Home() {
             {!['complete', 'failed', 'cancelled'].includes(currentJob.status) && (
               <div className="mb-6 space-y-3">
                 {/* Progress bar */}
-                <div className="relative">
-                  <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-500"
-                      style={{ width: `${Math.max(0, currentJob.progress?.percentage ?? 5)}%` }}
-                    />
-                  </div>
-                  <div className="absolute right-0 -top-6 text-sm text-gray-400">
-                    {currentJob.progress?.percentage != null 
-                      ? (currentJob.progress.percentage >= 0 ? `${currentJob.progress.percentage}%` : 'Paused')
-                      : 'Starting...'}
-                  </div>
+                <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-500"
+                    style={{ width: `${Math.max(0, currentJob.progress?.percentage ?? 5)}%` }}
+                  />
                 </div>
                 
                 {/* Stage indicators */}
