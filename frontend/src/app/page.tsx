@@ -233,7 +233,7 @@ export default function Home() {
         throw new Error(err.error || 'Failed to create job');
       }
       const data = await res.json();
-      setCurrentJob({ ...data, input: { saasName, description }, status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      setCurrentJob({ id: data.jobId, ...data, input: { saasName, description }, status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       setSaasName('');
       setCustomName('');
       setTargetUrl('');
