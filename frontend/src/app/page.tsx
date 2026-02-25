@@ -46,13 +46,19 @@ export default function Home() {
       const interval = setInterval(async () => {
         try {
           const res = await fetch(`${API_URL}/api/jobs/${currentJob.id}`);
+          if (!res.ok) {
+            console.error('Poll failed:', res.status);
+            return;
+          }
           const job = await res.json();
-          setCurrentJob(job);
-          if (['complete', 'failed'].includes(job.status)) {
-            loadJobs();
+          if (job && job.id) {
+            setCurrentJob(job);
+            if (['complete', 'failed'].includes(job.status)) {
+              loadJobs();
+            }
           }
         } catch (e) {
-          console.error('Failed to poll job');
+          console.error('Failed to poll job:', e);
         }
       }, 3000);
       return () => clearInterval(interval);
@@ -67,10 +73,16 @@ export default function Home() {
   async function loadJobs() {
     try {
       const res = await fetch(`${API_URL}/api/jobs`);
+      if (!res.ok) {
+        console.error('API returned error:', res.status);
+        return;
+      }
       const data = await res.json();
-      setJobs(data);
+      // Ensure data is an array
+      setJobs(Array.isArray(data) ? data : []);
     } catch (e) {
-      console.error('Failed to load jobs');
+      console.error('Failed to load jobs:', e);
+      setJobs([]); // Reset to empty array on error
     }
   }
 
