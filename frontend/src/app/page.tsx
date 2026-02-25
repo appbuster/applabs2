@@ -172,6 +172,24 @@ export default function Home() {
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   }
 
+  function getStatusDescription(status: string): string {
+    const descriptions: Record<string, string> = {
+      pending: 'Starting job, preparing to analyze...',
+      researching: 'Analyzing target SaaS features and design...',
+      generating: 'Generating application code...',
+      testing: 'Running automated tests...',
+      fixing: 'Auto-fixing detected issues...',
+      verifying: 'Verifying feature parity...',
+      iterating: 'Improving code based on feedback...',
+      deploying: 'Deploying to GitHub and Render...',
+      paused: 'Job paused',
+      complete: 'Complete',
+      failed: 'Failed',
+      cancelled: 'Cancelled',
+    };
+    return descriptions[status] || status;
+  }
+
   async function runIteration(jobId: string) {
     setActionLoading(jobId);
     try {
@@ -383,25 +401,34 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Progress Section */}
-            {currentJob.progress && !['complete', 'failed', 'cancelled'].includes(currentJob.status) && (
+            {/* Progress Section - always show for active jobs */}
+            {!['complete', 'failed', 'cancelled'].includes(currentJob.status) && (
               <div className="mb-6 space-y-3">
                 {/* Progress bar */}
                 <div className="relative">
                   <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
                     <div 
                       className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-500"
-                      style={{ width: `${Math.max(0, currentJob.progress.percentage)}%` }}
+                      style={{ width: `${Math.max(0, currentJob.progress?.percentage ?? 5)}%` }}
                     />
                   </div>
                   <div className="absolute right-0 -top-6 text-sm text-gray-400">
-                    {currentJob.progress.percentage >= 0 ? `${currentJob.progress.percentage}%` : 'Paused'}
+                    {currentJob.progress?.percentage != null 
+                      ? (currentJob.progress.percentage >= 0 ? `${currentJob.progress.percentage}%` : 'Paused')
+                      : 'Starting...'}
                   </div>
                 </div>
                 
                 {/* Stage indicators */}
                 <div className="flex justify-between text-xs">
-                  {currentJob.progress.stages?.map((stage, i) => (
+                  {(currentJob.progress?.stages || [
+                    { name: 'Research', completed: false, current: currentJob.status === 'researching' || currentJob.status === 'pending' },
+                    { name: 'Generate', completed: false, current: currentJob.status === 'generating' },
+                    { name: 'Test', completed: false, current: currentJob.status === 'testing' },
+                    { name: 'Fix', completed: false, current: currentJob.status === 'fixing' },
+                    { name: 'Verify', completed: false, current: currentJob.status === 'verifying' },
+                    { name: 'Deploy', completed: false, current: currentJob.status === 'deploying' },
+                  ]).map((stage, i) => (
                     <div 
                       key={i} 
                       className={`flex flex-col items-center ${
@@ -421,14 +448,16 @@ export default function Home() {
                 {/* Current step details */}
                 <div className="flex items-center justify-between text-sm">
                   <div className="text-gray-300">
-                    <span className="font-medium">{currentJob.progress.step}</span>
-                    {currentJob.progress.details && (
+                    <span className="font-medium">
+                      {currentJob.progress?.step || getStatusDescription(currentJob.status)}
+                    </span>
+                    {currentJob.progress?.details && (
                       <span className="text-gray-500 ml-2">• {currentJob.progress.details}</span>
                     )}
                   </div>
                   <div className="flex items-center gap-1 text-gray-500">
                     <Clock className="w-4 h-4" />
-                    <span>{formatElapsedTime(currentJob.progress.startedAt || currentJob.createdAt)}</span>
+                    <span>{formatElapsedTime(currentJob.progress?.startedAt || currentJob.createdAt)}</span>
                   </div>
                 </div>
 
