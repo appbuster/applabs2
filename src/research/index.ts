@@ -4,6 +4,7 @@
 import * as cheerio from 'cheerio';
 import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../utils/logger.js';
+import { VisualAnalyzer, VisualAnalysis } from './visual-analyzer.js';
 
 export interface SaaSAnalysis {
   name: string;
@@ -15,6 +16,9 @@ export interface SaaSAnalysis {
   uiPatterns: string[];
   techStack: TechRecommendation;
   pricing: PricingTier[];
+  // Visual design analysis
+  visualDesign?: VisualAnalysis;
+  targetUrl?: string;
 }
 
 export interface Feature {
@@ -58,6 +62,7 @@ export class ResearchModule {
     name: string;
     url?: string;
     description?: string;
+    captureVisuals?: boolean;
   }): Promise<SaaSAnalysis> {
     logger.info(`Researching SaaS: ${input.name}`);
 
@@ -65,6 +70,28 @@ export class ResearchModule {
     let context = `SaaS Product: ${input.name}\n`;
     if (input.description) {
       context += `Description: ${input.description}\n`;
+    }
+    
+    // Visual analysis if URL provided and captureVisuals enabled
+    let visualDesign: VisualAnalysis | undefined;
+    if (input.url && input.captureVisuals !== false) {
+      try {
+        logger.info(`Capturing visual design from: ${input.url}`);
+        const visualAnalyzer = new VisualAnalyzer(this.anthropic.apiKey as string);
+        await visualAnalyzer.initialize();
+        
+        const screenshotDir = `/tmp/applabs2-screenshots/${input.name.toLowerCase().replace(/\s+/g, '-')}`;
+        const screenshots = await visualAnalyzer.captureScreenshots(input.url, screenshotDir);
+        
+        if (screenshots.length > 0) {
+          visualDesign = await visualAnalyzer.analyzeVisuals(screenshots);
+          logger.info(`Visual analysis complete: ${visualDesign.layoutType} layout, primary color ${visualDesign.primaryColor}`);
+        }
+        
+        await visualAnalyzer.close();
+      } catch (e: any) {
+        logger.warn(`Visual analysis failed: ${e.message}`);
+      }
     }
 
     // Use Claude to analyze and generate a comprehensive spec
@@ -149,6 +176,15 @@ Return ONLY valid JSON, no markdown.`,
       }
       
       const analysis = JSON.parse(jsonText) as SaaSAnalysis;
+      
+      // Add visual design if captured
+      if (visualDesign) {
+        analysis.visualDesign = visualDesign;
+      }
+      if (input.url) {
+        analysis.targetUrl = input.url;
+      }
+      
       logger.info(`Analysis complete: ${analysis.coreFeatures.length} features, ${analysis.entities.length} entities`);
       return analysis;
     } catch (e) {
