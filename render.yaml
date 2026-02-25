@@ -1,6 +1,7 @@
 services:
+  # Backend API
   - type: web
-    name: applabs2
+    name: applabs2-api
     runtime: node
     buildCommand: npm install && npm run build
     startCommand: npm start
@@ -9,5 +10,23 @@ services:
         sync: false
       - key: RENDER_API_KEY
         sync: false
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3003"
+
+  # Frontend Web UI
+  - type: web
+    name: applabs2-web
+    runtime: node
+    buildCommand: cd frontend && npm install && npm run build
+    startCommand: cd frontend && npm start
+    envVars:
+      - key: API_URL
+        fromService:
+          name: applabs2-api
+          type: web
+          property: host
+          prefix: https://
       - key: NODE_ENV
         value: production

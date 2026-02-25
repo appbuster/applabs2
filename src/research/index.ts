@@ -142,11 +142,18 @@ Return ONLY valid JSON, no markdown.`,
     }
 
     try {
-      const analysis = JSON.parse(content.text) as SaaSAnalysis;
+      // Strip markdown code blocks if present
+      let jsonText = content.text.trim();
+      if (jsonText.startsWith('```')) {
+        jsonText = jsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      }
+      
+      const analysis = JSON.parse(jsonText) as SaaSAnalysis;
       logger.info(`Analysis complete: ${analysis.coreFeatures.length} features, ${analysis.entities.length} entities`);
       return analysis;
     } catch (e) {
-      logger.error('Failed to parse analysis response');
+      logger.error('Failed to parse analysis response: ' + (e instanceof Error ? e.message : String(e)));
+      logger.error('Response was: ' + content.text.slice(0, 500));
       throw new Error('Failed to parse SaaS analysis');
     }
   }
