@@ -6,6 +6,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { SaaSAnalysis, Entity, Feature } from '../research/index.js';
 import { logger } from '../utils/logger.js';
+import * as templates from './templates.js';
 
 export interface GenerationResult {
   outputDir: string;
@@ -87,10 +88,9 @@ export class GeneratorModule {
   }
 
   private async scaffoldProject(outputDir: string, analysis: SaaSAnalysis, slug: string): Promise<void> {
-    // Create directory structure
+    // Create directory structure (FLAT structure, no route groups - lesson learned)
     const dirs = [
-      'apps/web/src/app/(app)',
-      'apps/web/src/app/login',
+      'apps/web/src/app',           // Root app dir
       'apps/web/src/components/ui',
       'apps/web/src/components/layout',
       'apps/web/src/components/forms',
@@ -98,13 +98,41 @@ export class GeneratorModule {
       'apps/api/src/routes',
       'apps/api/src/services',
       'apps/api/prisma',
-      'packages/ui/src',
-      'packages/config',
       '.github/workflows',
     ];
     for (const dir of dirs) {
       await fs.ensureDir(path.join(outputDir, dir));
     }
+    
+    // Create entity page directories (flat structure)
+    for (const entity of analysis.entities) {
+      await fs.ensureDir(path.join(outputDir, `apps/web/src/app/${entity.name.toLowerCase()}s`));
+    }
+
+    // ESSENTIAL: Create Next.js config files (lesson learned from build failures)
+    await fs.writeFile(path.join(outputDir, 'apps/web/next.config.js'), templates.NEXT_CONFIG);
+    await fs.writeFile(path.join(outputDir, 'apps/web/tailwind.config.js'), templates.TAILWIND_CONFIG);
+    await fs.writeFile(path.join(outputDir, 'apps/web/postcss.config.js'), templates.POSTCSS_CONFIG);
+    await fs.writeFile(path.join(outputDir, 'apps/web/tsconfig.json'), templates.TSCONFIG_WEB);
+    await fs.writeFile(path.join(outputDir, 'apps/web/next-env.d.ts'), templates.NEXT_ENV_DTS);
+    
+    // Create root layout and globals (REQUIRED for Next.js App Router)
+    await fs.writeFile(
+      path.join(outputDir, 'apps/web/src/app/layout.tsx'),
+      templates.generateRootLayout(analysis.name, analysis.description)
+    );
+    await fs.writeFile(
+      path.join(outputDir, 'apps/web/src/app/globals.css'),
+      templates.GLOBALS_CSS
+    );
+    
+    // Create home page
+    const featureNames = analysis.coreFeatures.map(f => f.name);
+    const entityNames = analysis.entities.map(e => e.name);
+    await fs.writeFile(
+      path.join(outputDir, 'apps/web/src/app/page.tsx'),
+      templates.generateHomePage(analysis.name, featureNames, entityNames)
+    );
 
     // Root package.json
     await fs.writeJson(path.join(outputDir, 'package.json'), {
@@ -139,36 +167,18 @@ API_URL="http://localhost:3001"
 DEMO_MODE="true"
 `.trim());
 
-    // Web package.json
+    // Web package.json (using exact versions from templates - lesson learned)
     await fs.writeJson(path.join(outputDir, 'apps/web/package.json'), {
-      name: `@${slug}/web`,
+      name: `${slug}-web`,
       version: '1.0.0',
       private: true,
       scripts: {
         dev: 'next dev',
         build: 'next build',
         start: 'next start',
-        lint: 'next lint',
       },
-      dependencies: {
-        next: '^14.1.0',
-        react: '^18.2.0',
-        'react-dom': '^18.2.0',
-        'next-auth': '^4.24.0',
-        'react-hook-form': '^7.49.0',
-        zod: '^3.22.0',
-        'lucide-react': '^0.309.0',
-        sonner: '^1.3.0',
-        clsx: '^2.1.0',
-        'tailwind-merge': '^2.2.0',
-      },
-      devDependencies: {
-        typescript: '^5.3.0',
-        '@types/react': '^18.2.0',
-        tailwindcss: '^3.4.0',
-        autoprefixer: '^10.4.0',
-        postcss: '^8.4.0',
-      },
+      dependencies: templates.WEB_PACKAGE_JSON.dependencies,
+      devDependencies: templates.WEB_PACKAGE_JSON.devDependencies,
     }, { spaces: 2 });
 
     // API package.json
@@ -299,13 +309,13 @@ try {
   }
 
   private async generateFrontend(outputDir: string, analysis: SaaSAnalysis, files: string[]): Promise<void> {
-    // Generate each page using Claude
+    // Generate each page using Claude (FLAT routing, no route groups - lesson learned)
     for (const entity of analysis.entities) {
       const slug = entity.name.toLowerCase() + 's';
       
-      // List page
+      // List page (flat route: /users, /workspaces, etc.)
       const listPage = await this.generatePageCode(entity, 'list', analysis);
-      const listPath = `apps/web/src/app/(app)/${slug}/page.tsx`;
+      const listPath = `apps/web/src/app/${slug}/page.tsx`;
       await fs.ensureDir(path.dirname(path.join(outputDir, listPath)));
       await fs.writeFile(path.join(outputDir, listPath), listPage);
       files.push(listPath);
@@ -318,15 +328,13 @@ try {
       files.push(formPath);
     }
 
-    // Dashboard
+    // Dashboard (flat route: /dashboard)
+    await fs.ensureDir(path.join(outputDir, 'apps/web/src/app/dashboard'));
     const dashboard = await this.generateDashboard(analysis);
-    await fs.writeFile(path.join(outputDir, 'apps/web/src/app/(app)/dashboard/page.tsx'), dashboard);
-    files.push('apps/web/src/app/(app)/dashboard/page.tsx');
-
-    // Layout
-    const layout = await this.generateLayout(analysis);
-    await fs.writeFile(path.join(outputDir, 'apps/web/src/app/(app)/layout.tsx'), layout);
-    files.push('apps/web/src/app/(app)/layout.tsx');
+    await fs.writeFile(path.join(outputDir, 'apps/web/src/app/dashboard/page.tsx'), dashboard);
+    files.push('apps/web/src/app/dashboard/page.tsx');
+    
+    // Note: Root layout already created in scaffoldProject with templates
 
     // Login
     const login = await this.generateLoginPage(analysis);
