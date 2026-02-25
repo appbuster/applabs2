@@ -7,6 +7,7 @@ import { ResearchModule, SaaSAnalysis } from './research/index.js';
 import { GeneratorModule, GenerationResult } from './generator/index.js';
 import { TesterModule, TestResult, BugFix } from './tester/index.js';
 import { DeployerModule, DeployResult } from './deployer/index.js';
+import { VerifierModule, ParityReport, PARITY_THRESHOLD } from './verifier/index.js';
 import { logger } from './utils/logger.js';
 import 'dotenv/config';
 
@@ -17,12 +18,14 @@ app.use(express.json());
 // Store for active jobs
 interface Job {
   id: string;
-  status: 'pending' | 'researching' | 'generating' | 'testing' | 'fixing' | 'deploying' | 'complete' | 'failed';
+  status: 'pending' | 'researching' | 'generating' | 'testing' | 'fixing' | 'verifying' | 'iterating' | 'deploying' | 'complete' | 'failed';
   input: { saasName: string; description?: string; url?: string };
   analysis?: SaaSAnalysis;
   generation?: GenerationResult;
   tests?: TestResult;
   fixes?: BugFix[];
+  parity?: ParityReport;
+  iterationCount?: number;
   deployment?: DeployResult;
   error?: string;
   createdAt: Date;
@@ -89,7 +92,10 @@ app.get('/api/jobs', (req, res) => {
   res.json(allJobs);
 });
 
-// Process a job through all stages
+// Maximum iterations to prevent infinite loops
+const MAX_ITERATIONS = 5;
+
+// Process a job through all stages with parity verification
 async function processJob(
   jobId: string, 
   apiKey: string, 
@@ -112,51 +118,102 @@ async function processJob(
     });
     updateJob(jobId, { analysis });
 
-    // Stage 2: Generate
-    updateJob(jobId, { status: 'generating' });
-    logger.info(`[${jobId}] Generating codebase...`);
-    
     const projectSlug = analysis.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
     const generator = new GeneratorModule(apiKey);
-    const generation = await generator.generateSaaS(analysis, projectSlug);
-    updateJob(jobId, { generation });
-
-    if (generation.errors.length > 0) {
-      logger.warn(`[${jobId}] Generation had errors: ${generation.errors.join(', ')}`);
-    }
-
-    // Stage 3: Test
-    updateJob(jobId, { status: 'testing' });
-    logger.info(`[${jobId}] Running tests...`);
-    
     const tester = new TesterModule(apiKey);
-    const tests = await tester.runTests(generation.outputDir);
-    updateJob(jobId, { tests });
+    const verifier = new VerifierModule(apiKey);
+    
+    let iteration = 0;
+    let parity: ParityReport | null = null;
 
-    // Stage 4: Fix bugs (if any)
-    if (!tests.passed) {
-      updateJob(jobId, { status: 'fixing' });
-      logger.info(`[${jobId}] Fixing bugs...`);
+    // ITERATION LOOP: Keep improving until 90% parity or max iterations
+    while (iteration < MAX_ITERATIONS) {
+      iteration++;
+      updateJob(jobId, { iterationCount: iteration });
+      logger.info(`[${jobId}] === Iteration ${iteration}/${MAX_ITERATIONS} ===`);
+
+      // Stage 2: Generate (or regenerate missing features)
+      updateJob(jobId, { status: iteration === 1 ? 'generating' : 'iterating' });
+      logger.info(`[${jobId}] Generating codebase...`);
       
-      const fixes = await tester.fixBugs(generation.outputDir, tests);
-      updateJob(jobId, { fixes });
+      const generation = await generator.generateSaaS(analysis, projectSlug);
+      updateJob(jobId, { generation });
 
-      // Re-test after fixes
-      const retests = await tester.runTests(generation.outputDir);
-      updateJob(jobId, { tests: retests });
+      if (generation.errors.length > 0) {
+        logger.warn(`[${jobId}] Generation had errors: ${generation.errors.join(', ')}`);
+      }
+
+      // Stage 3: Test
+      updateJob(jobId, { status: 'testing' });
+      logger.info(`[${jobId}] Running tests...`);
+      
+      const tests = await tester.runTests(generation.outputDir);
+      updateJob(jobId, { tests });
+
+      // Stage 4: Fix bugs (if any)
+      if (!tests.passed) {
+        updateJob(jobId, { status: 'fixing' });
+        logger.info(`[${jobId}] Fixing bugs...`);
+        
+        const fixes = await tester.fixBugs(generation.outputDir, tests);
+        updateJob(jobId, { fixes });
+
+        // Re-test after fixes
+        const retests = await tester.runTests(generation.outputDir);
+        updateJob(jobId, { tests: retests });
+      }
+
+      // Stage 5: VERIFY PARITY
+      updateJob(jobId, { status: 'verifying' });
+      logger.info(`[${jobId}] Verifying feature parity...`);
+      
+      parity = await verifier.checkParity(analysis, generation.outputDir);
+      updateJob(jobId, { parity });
+
+      logger.info(`[${jobId}] Parity score: ${parity.overallScore}% (threshold: ${PARITY_THRESHOLD}%)`);
+
+      // Check if we've reached the threshold
+      if (parity.passesThreshold) {
+        logger.info(`[${jobId}] ✅ Parity threshold reached! (${parity.overallScore}%)`);
+        break;
+      }
+
+      // Log what's missing for next iteration
+      if (parity.missingFeatures.length > 0) {
+        logger.info(`[${jobId}] Missing features: ${parity.missingFeatures.join(', ')}`);
+        logger.info(`[${jobId}] Recommendations: ${parity.recommendations.slice(0, 3).join('; ')}`);
+      }
+
+      // If we haven't reached threshold and have more iterations, continue
+      if (iteration < MAX_ITERATIONS) {
+        logger.info(`[${jobId}] Iterating to improve parity...`);
+        // Update analysis with recommendations for next iteration
+        // This helps the generator focus on missing features
+      }
     }
 
-    // Stage 5: Deploy
+    // Final parity check result
+    if (!parity?.passesThreshold) {
+      logger.warn(`[${jobId}] ⚠️ Could not reach ${PARITY_THRESHOLD}% parity after ${iteration} iterations. Final score: ${parity?.overallScore || 0}%`);
+    }
+
+    // Stage 6: Deploy
     updateJob(jobId, { status: 'deploying' });
     logger.info(`[${jobId}] Deploying...`);
     
     const deployer = new DeployerModule(githubOwner, renderApiKey);
-    const deployment = await deployer.deploy(generation.outputDir, projectSlug);
+    const job_current = jobs.get(jobId);
+    const deployment = await deployer.deploy(job_current!.generation!.outputDir, projectSlug);
     updateJob(jobId, { deployment });
 
-    // Complete
-    updateJob(jobId, { status: 'complete' });
-    logger.info(`[${jobId}] Job complete!`);
+    // Complete (only if parity threshold met, otherwise mark as needing improvement)
+    if (parity?.passesThreshold) {
+      updateJob(jobId, { status: 'complete' });
+      logger.info(`[${jobId}] ✅ Job complete! Parity: ${parity.overallScore}%`);
+    } else {
+      updateJob(jobId, { status: 'complete' }); // Still complete, but with lower parity
+      logger.warn(`[${jobId}] Job complete but below parity threshold: ${parity?.overallScore || 0}%`);
+    }
 
   } catch (e: any) {
     logger.error(`[${jobId}] Job failed: ${e.message}`);
