@@ -72,11 +72,12 @@ export class ResearchModule {
       context += `Description: ${input.description}\n`;
     }
     
-    // Visual analysis if URL provided and captureVisuals enabled
+    // Visual analysis - capture target design to DIFFERENTIATE from (not copy)
+    // We analyze the target so we can ensure our design is DIFFERENT
     let visualDesign: VisualAnalysis | undefined;
-    if (input.url && input.captureVisuals !== false) {
+    if (input.url && input.captureVisuals === true) {
       try {
-        logger.info(`Capturing visual design from: ${input.url}`);
+        logger.info(`Capturing target design to differentiate from: ${input.url}`);
         const visualAnalyzer = new VisualAnalyzer(this.anthropic.apiKey as string);
         await visualAnalyzer.initialize();
         
@@ -85,7 +86,9 @@ export class ResearchModule {
         
         if (screenshots.length > 0) {
           visualDesign = await visualAnalyzer.analyzeVisuals(screenshots);
-          logger.info(`Visual analysis complete: ${visualDesign.layoutType} layout, primary color ${visualDesign.primaryColor}`);
+          // IMPORTANT: We'll use this to generate a DIFFERENT design
+          logger.info(`Target uses: ${visualDesign.layoutType} layout, primary ${visualDesign.primaryColor}`);
+          logger.info(`We'll generate a contrasting original design`);
         }
         
         await visualAnalyzer.close();

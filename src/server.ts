@@ -9,7 +9,7 @@ import { TesterModule, TestResult, BugFix } from './tester/index.js';
 import { DeployerModule, DeployResult } from './deployer/index.js';
 import { VerifierModule, ParityReport, PARITY_THRESHOLD } from './verifier/index.js';
 import { BrowserVerifier, BrowserParityReport } from './verifier/browser-verifier.js';
-import { VisualParityVerifier, VisualParityReport } from './verifier/visual-parity.js';
+import { DifferentiationChecker, DifferentiationReport } from './verifier/differentiation-checker.js';
 import { logger } from './utils/logger.js';
 import 'dotenv/config';
 
@@ -27,7 +27,7 @@ interface Job {
   tests?: TestResult;
   fixes?: BugFix[];
   parity?: ParityReport | BrowserParityReport;
-  visualParity?: VisualParityReport;
+  differentiation?: DifferentiationReport;
   iterationCount?: number;
   deployment?: DeployResult;
   error?: string;
@@ -185,7 +185,7 @@ async function processJob(
     const tester = new TesterModule(apiKey);
     const verifier = new VerifierModule(apiKey);
     const browserVerifier = new BrowserVerifier();
-    const visualVerifier = new VisualParityVerifier(apiKey);
+    const diffChecker = new DifferentiationChecker(apiKey);
     
     // Initialize job controls
     jobControls.set(jobId, { paused: false, accepted: false });
@@ -311,30 +311,31 @@ async function processJob(
         logger.warn(`[${jobId}] Browser verification failed: ${e.message}`);
       }
       
-      // Stage 8: Visual parity verification (compare to target)
+      // Stage 8: Differentiation check (ensure we're DIFFERENT from target)
       if (analysis.targetUrl) {
-        logger.info(`[${jobId}] Running visual parity verification against target...`);
+        logger.info(`[${jobId}] Checking differentiation from target (avoiding lawsuit risk)...`);
         try {
-          await visualVerifier.initialize();
-          const visualParity = await visualVerifier.compareVisuals(
+          await diffChecker.initialize();
+          const diffReport = await diffChecker.checkDifferentiation(
             analysis.targetUrl,
             deployment.renderUrls.web,
             job_current!.generation!.outputDir
           );
-          updateJob(jobId, { visualParity });
+          updateJob(jobId, { differentiation: diffReport });
           
-          logger.info(`[${jobId}] Visual parity score: ${visualParity.scores.overall}%`);
-          logger.info(`[${jobId}]   Layout: ${visualParity.scores.layout}%`);
-          logger.info(`[${jobId}]   Colors: ${visualParity.scores.colors}%`);
-          logger.info(`[${jobId}]   Components: ${visualParity.scores.components}%`);
+          logger.info(`[${jobId}] Differentiation score: ${diffReport.score.overall}% (higher = more different = safer)`);
+          logger.info(`[${jobId}]   Layout different: ${diffReport.score.layoutDifferent ? '✓' : '✗'}`);
+          logger.info(`[${jobId}]   Colors different: ${diffReport.score.colorsDifferent ? '✓' : '✗'}`);
+          logger.info(`[${jobId}]   Components different: ${diffReport.score.componentsDifferent ? '✓' : '✗'}`);
+          logger.info(`[${jobId}]   Legal risk: ${diffReport.legalRisk.toUpperCase()}`);
           
-          if (visualParity.scores.details.mismatches.length > 0) {
-            logger.info(`[${jobId}]   Mismatches: ${visualParity.scores.details.mismatches.slice(0, 3).join(', ')}`);
+          if (diffReport.score.details.similarities.length > 0) {
+            logger.warn(`[${jobId}]   ⚠️ Similarities: ${diffReport.score.details.similarities.slice(0, 3).join(', ')}`);
           }
           
-          await visualVerifier.close();
+          await diffChecker.close();
         } catch (e: any) {
-          logger.warn(`[${jobId}] Visual parity verification failed: ${e.message}`);
+          logger.warn(`[${jobId}] Differentiation check failed: ${e.message}`);
         }
       }
     }
