@@ -35,6 +35,8 @@ interface Job {
 
 export default function Home() {
   const [saasName, setSaasName] = useState('');
+  const [customName, setCustomName] = useState('');
+  const [targetUrl, setTargetUrl] = useState('');
   const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentJob, setCurrentJob] = useState<Job | null>(null);
@@ -97,16 +99,24 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           saasName: saasName.trim(),
+          customName: customName.trim() || undefined,
+          url: targetUrl.trim() || undefined,
           description: description.trim() || undefined,
           githubOwner: 'appbuster',
         }),
       });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to create job');
+      }
       const data = await res.json();
       setCurrentJob({ ...data, input: { saasName, description }, status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       setSaasName('');
+      setCustomName('');
+      setTargetUrl('');
       setDescription('');
-    } catch (e) {
-      alert('Failed to create job');
+    } catch (e: any) {
+      alert(e.message || 'Failed to create job');
     } finally {
       setIsSubmitting(false);
     }
@@ -153,18 +163,47 @@ export default function Home() {
         <div className="bg-gray-800/50 backdrop-blur rounded-2xl p-8 mb-8 border border-gray-700">
           <h2 className="text-2xl font-semibold text-white mb-6">Create New SaaS</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Inspiration SaaS *
+                </label>
+                <input
+                  type="text"
+                  value={saasName}
+                  onChange={(e) => setSaasName(e.target.value)}
+                  placeholder="e.g., Notion, SEMrush, Figma..."
+                  className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={isSubmitting}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Your Clone Name (optional)
+                </label>
+                <input
+                  type="text"
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                  placeholder="e.g., MyAnalytics, TaskFlow..."
+                  className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={isSubmitting}
+                />
+              </div>
+            </div>
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
-                SaaS Name / Inspiration
+                Target URL (optional - for design differentiation)
               </label>
               <input
-                type="text"
-                value={saasName}
-                onChange={(e) => setSaasName(e.target.value)}
-                placeholder="e.g., Notion, Trello, Slack, Figma..."
+                type="url"
+                value={targetUrl}
+                onChange={(e) => setTargetUrl(e.target.value)}
+                placeholder="e.g., https://semrush.com"
                 className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 disabled={isSubmitting}
               />
+              <p className="text-xs text-gray-500 mt-1">We&apos;ll analyze the design and create a DIFFERENT look to avoid legal issues</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">

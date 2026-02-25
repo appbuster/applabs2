@@ -21,7 +21,7 @@ app.use(express.json());
 interface Job {
   id: string;
   status: 'pending' | 'researching' | 'generating' | 'testing' | 'fixing' | 'verifying' | 'iterating' | 'deploying' | 'complete' | 'failed' | 'paused';
-  input: { saasName: string; description?: string; url?: string };
+  input: { saasName: string; customName?: string; description?: string; url?: string };
   analysis?: SaaSAnalysis;
   generation?: GenerationResult;
   tests?: TestResult;
@@ -48,7 +48,7 @@ app.get('/health', (req, res) => {
 // Create a new SaaS generation job
 app.post('/api/jobs', async (req, res) => {
   try {
-    const { saasName, description, url, anthropicApiKey, githubOwner, renderApiKey } = req.body;
+    const { saasName, customName, description, url, anthropicApiKey, githubOwner, renderApiKey } = req.body;
 
     if (!saasName) {
       return res.status(400).json({ error: 'saasName is required' });
@@ -65,14 +65,14 @@ app.post('/api/jobs', async (req, res) => {
     const job: Job = {
       id: jobId,
       status: 'pending',
-      input: { saasName, description, url },
+      input: { saasName, customName, description, url },
       createdAt: new Date(),
       updatedAt: new Date(),
     };
     jobs.set(jobId, job);
 
     // Start processing in background
-    processJob(jobId, apiKey, ghOwner, renderApiKey || process.env.RENDER_API_KEY);
+    processJob(jobId, apiKey, ghOwner, renderApiKey || process.env.RENDER_API_KEY, customName);
 
     res.json({ jobId, status: 'pending' });
   } catch (e: any) {
@@ -157,7 +157,8 @@ async function processJob(
   jobId: string, 
   apiKey: string, 
   githubOwner: string,
-  renderApiKey?: string
+  renderApiKey?: string,
+  customName?: string
 ): Promise<void> {
   const job = jobs.get(jobId);
   if (!job) return;
@@ -174,6 +175,13 @@ async function processJob(
       url: job.input.url,
       captureVisuals: !!job.input.url, // Capture visuals if URL provided
     });
+    
+    // Use custom name if provided, otherwise use generated name
+    if (customName) {
+      analysis.name = customName;
+      logger.info(`[${jobId}] Using custom name: ${customName}`);
+    }
+    
     updateJob(jobId, { analysis });
     
     if (analysis.visualDesign) {
