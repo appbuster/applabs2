@@ -1,10 +1,20 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Rocket, Loader2, CheckCircle, XCircle, GitBranch, Globe, Database, Code, Trash2, StopCircle, Clock } from 'lucide-react';
+import { Rocket, Loader2, CheckCircle, XCircle, GitBranch, Globe, Database, Code, Trash2, StopCircle, Clock, RefreshCw, TrendingUp } from 'lucide-react';
 
 // NEXT_PUBLIC_ prefix required for client-side env vars in Next.js
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://applabs2-api-v2.onrender.com';
+
+interface IterationHistory {
+  version: number;
+  parityScore: number;
+  filesGenerated: number;
+  testsPassed: boolean;
+  fixesApplied: number;
+  completedAt: string;
+  missingFeatures?: string[];
+}
 
 interface Job {
   id: string;
@@ -28,6 +38,11 @@ interface Job {
       api?: string;
     };
   };
+  parity?: {
+    overallScore?: number;
+    totalScore?: number;
+    missingFeatures?: string[];
+  };
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -41,6 +56,7 @@ interface Job {
     startedAt: string;
     stages: { name: string; completed: boolean; current: boolean }[];
   };
+  iterations?: IterationHistory[];
 }
 
 export default function Home() {
@@ -154,6 +170,27 @@ export default function Home() {
     const mins = Math.floor(elapsed / 60);
     const secs = elapsed % 60;
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  }
+
+  async function runIteration(jobId: string) {
+    setActionLoading(jobId);
+    try {
+      const res = await fetch(`${API_URL}/api/jobs/${jobId}/iterate`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to start iteration');
+      }
+      // Refresh job status
+      const jobRes = await fetch(`${API_URL}/api/jobs/${jobId}`);
+      if (jobRes.ok) {
+        const job = await jobRes.json();
+        setCurrentJob(job);
+      }
+    } catch (e: any) {
+      alert(e.message || 'Failed to run iteration');
+    } finally {
+      setActionLoading(null);
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -409,6 +446,115 @@ export default function Home() {
                 <span className="font-medium">Input:</span>
                 <span>{currentJob.input.saasName}</span>
               </div>
+
+              {/* Iteration History */}
+              {currentJob.iterations && currentJob.iterations.length > 0 && (
+                <div className="bg-gray-900/50 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-lg font-medium text-white flex items-center gap-2">
+                      <TrendingUp className="w-5 h-5 text-blue-400" />
+                      Version History
+                    </h3>
+                    {['complete', 'paused'].includes(currentJob.status) && (
+                      <button
+                        onClick={() => runIteration(currentJob.id)}
+                        disabled={actionLoading === currentJob.id}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${actionLoading === currentJob.id ? 'animate-spin' : ''}`} />
+                        Run Another Iteration
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    {currentJob.iterations.map((iter, idx) => {
+                      const isLatest = idx === currentJob.iterations!.length - 1;
+                      const prevScore = idx > 0 ? currentJob.iterations![idx - 1].parityScore : 0;
+                      const improvement = iter.parityScore - prevScore;
+                      
+                      return (
+                        <div 
+                          key={iter.version}
+                          className={`flex items-center justify-between p-2 rounded ${
+                            isLatest ? 'bg-blue-900/30 border border-blue-700/50' : 'bg-gray-800/50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className={`font-mono text-sm ${isLatest ? 'text-blue-300' : 'text-gray-400'}`}>
+                              v{iter.version}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <div className={`text-lg font-bold ${
+                                iter.parityScore >= 90 ? 'text-green-400' :
+                                iter.parityScore >= 70 ? 'text-yellow-400' :
+                                iter.parityScore >= 50 ? 'text-orange-400' : 'text-red-400'
+                              }`}>
+                                {iter.parityScore}%
+                              </div>
+                              {idx > 0 && improvement !== 0 && (
+                                <span className={`text-xs ${improvement > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                  {improvement > 0 ? '+' : ''}{improvement}%
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4 text-xs text-gray-500">
+                            <span>{iter.filesGenerated} files</span>
+                            <span className={iter.testsPassed ? 'text-green-400' : 'text-red-400'}>
+                              {iter.testsPassed ? '✓ tests' : '✗ tests'}
+                            </span>
+                            {iter.fixesApplied > 0 && (
+                              <span>{iter.fixesApplied} fixes</span>
+                            )}
+                            {isLatest && <span className="text-blue-400">← current</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* Missing features from latest iteration */}
+                  {currentJob.iterations && currentJob.iterations.length > 0 && 
+                   currentJob.iterations[currentJob.iterations.length - 1]?.missingFeatures?.length && 
+                   currentJob.iterations[currentJob.iterations.length - 1].missingFeatures!.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-700">
+                      <p className="text-xs text-gray-500 mb-1">Missing features:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {currentJob.iterations[currentJob.iterations.length - 1].missingFeatures!.map((f, i) => (
+                          <span key={i} className="px-2 py-0.5 bg-orange-900/30 text-orange-400 text-xs rounded">
+                            {f}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Run iteration button if no history yet but job is complete */}
+              {(!currentJob.iterations || currentJob.iterations.length === 0) && 
+               ['complete', 'paused'].includes(currentJob.status) && 
+               currentJob.parity && (
+                <div className="bg-gray-900/50 rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-gray-400">Current parity: </span>
+                      <span className={`font-bold ${
+                        (currentJob.parity.overallScore || currentJob.parity.totalScore || 0) >= 90 ? 'text-green-400' : 'text-yellow-400'
+                      }`}>
+                        {currentJob.parity.overallScore || currentJob.parity.totalScore || 0}%
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => runIteration(currentJob.id)}
+                      disabled={actionLoading === currentJob.id}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${actionLoading === currentJob.id ? 'animate-spin' : ''}`} />
+                      Improve Parity
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {currentJob.analysis && (
                 <div className="bg-gray-900/50 rounded-lg p-4">

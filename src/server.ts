@@ -18,6 +18,16 @@ app.use(cors());
 app.use(express.json());
 
 // Store for active jobs
+interface IterationHistory {
+  version: number;
+  parityScore: number;
+  filesGenerated: number;
+  testsPassed: boolean;
+  fixesApplied: number;
+  completedAt: Date;
+  missingFeatures?: string[];
+}
+
 interface Job {
   id: string;
   status: 'pending' | 'researching' | 'generating' | 'testing' | 'fixing' | 'verifying' | 'iterating' | 'deploying' | 'complete' | 'failed' | 'paused' | 'cancelled';
@@ -45,6 +55,8 @@ interface Job {
     startedAt: Date;
     stages: { name: string; completed: boolean; current: boolean }[];
   };
+  // Iteration history
+  iterations?: IterationHistory[];
 }
 
 const jobs = new Map<string, Job>();
@@ -192,6 +204,44 @@ app.post('/api/jobs/:id/cancel', (req, res) => {
   
   logger.info(`[${jobId}] Job cancelled by user`);
   res.json({ status: 'cancelled' });
+});
+
+// Re-run iteration on a job (improve parity)
+app.post('/api/jobs/:id/iterate', async (req, res) => {
+  const jobId = req.params.id;
+  const job = jobs.get(jobId);
+  
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  
+  // Can only iterate on complete or paused jobs
+  if (!['complete', 'paused'].includes(job.status)) {
+    return res.status(400).json({ error: 'Job must be complete or paused to re-iterate' });
+  }
+  
+  // Need analysis to iterate
+  if (!job.analysis) {
+    return res.status(400).json({ error: 'Job has no analysis data to iterate from' });
+  }
+  
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return res.status(400).json({ error: 'No API key configured' });
+  }
+  
+  // Reset controls and increment iteration
+  jobControls.set(jobId, { paused: false, accepted: false, cancelled: false });
+  job.status = 'iterating';
+  job.iterationCount = (job.iterationCount || 0) + 1;
+  job.maxIterations = (job.maxIterations || 5) + 1; // Allow one more iteration
+  job.updatedAt = new Date();
+  
+  // Run iteration in background
+  runIteration(jobId, apiKey);
+  
+  logger.info(`[${jobId}] Manual re-iteration triggered (version ${job.iterationCount})`);
+  res.json({ status: 'iterating', version: job.iterationCount });
 });
 
 // Delete a job and its artifacts
@@ -469,6 +519,21 @@ async function processJob(
 
       logger.info(`[${jobId}] Parity score: ${parity.overallScore}% (threshold: ${PARITY_THRESHOLD}%)`);
 
+      // Record iteration history
+      const job_now = jobs.get(jobId);
+      if (job_now) {
+        if (!job_now.iterations) job_now.iterations = [];
+        job_now.iterations.push({
+          version: iteration,
+          parityScore: parity.overallScore,
+          filesGenerated: job_now.generation?.files?.length || 0,
+          testsPassed: job_now.tests?.passed || false,
+          fixesApplied: job_now.fixes?.length || 0,
+          completedAt: new Date(),
+          missingFeatures: parity.missingFeatures?.slice(0, 5),
+        });
+      }
+
       // Check if we've reached the threshold
       if (parity.passesThreshold) {
         logger.info(`[${jobId}] ✅ Parity threshold reached! (${parity.overallScore}%)`);
@@ -592,6 +657,102 @@ function updateJob(jobId: string, updates: Partial<Job>): void {
   const job = jobs.get(jobId);
   if (job) {
     Object.assign(job, updates, { updatedAt: new Date() });
+  }
+}
+
+// Run a single iteration on an existing job (for manual re-iteration)
+async function runIteration(jobId: string, apiKey: string): Promise<void> {
+  const job = jobs.get(jobId);
+  if (!job || !job.analysis) return;
+  
+  const abortController = new AbortController();
+  jobAbortControllers.set(jobId, abortController);
+  
+  try {
+    const projectSlug = job.analysis.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    const generator = new GeneratorModule(apiKey);
+    const tester = new TesterModule(apiKey);
+    const verifier = new VerifierModule(apiKey);
+    const iteration = job.iterationCount || 1;
+    
+    if (checkCancelled(jobId)) throw new Error('Cancelled');
+    
+    // Generate
+    updateJob(jobId, { status: 'generating' });
+    updateProgress(jobId, 'generating', `Version ${iteration}: Regenerating code...`, 20, 
+      'Incorporating parity feedback');
+    logger.info(`[${jobId}] Re-iteration ${iteration}: Generating...`);
+    
+    const generation = await generator.generateSaaS(job.analysis, projectSlug);
+    updateJob(jobId, { generation });
+    updateProgress(jobId, 'generating', `Generated ${generation.files?.length || 0} files`, 40);
+    
+    if (checkCancelled(jobId)) throw new Error('Cancelled');
+    
+    // Test
+    updateJob(jobId, { status: 'testing' });
+    updateProgress(jobId, 'testing', 'Running tests...', 50);
+    logger.info(`[${jobId}] Re-iteration ${iteration}: Testing...`);
+    
+    const tests = await tester.runTests(generation.outputDir);
+    updateJob(jobId, { tests });
+    
+    if (checkCancelled(jobId)) throw new Error('Cancelled');
+    
+    // Fix if needed
+    if (!tests.passed) {
+      updateJob(jobId, { status: 'fixing' });
+      updateProgress(jobId, 'fixing', 'Auto-fixing issues...', 60);
+      
+      const fixes = await tester.fixBugs(generation.outputDir, tests);
+      updateJob(jobId, { fixes });
+      
+      const retests = await tester.runTests(generation.outputDir);
+      updateJob(jobId, { tests: retests });
+    }
+    
+    if (checkCancelled(jobId)) throw new Error('Cancelled');
+    
+    // Verify parity
+    updateJob(jobId, { status: 'verifying' });
+    updateProgress(jobId, 'verifying', 'Checking parity...', 75);
+    logger.info(`[${jobId}] Re-iteration ${iteration}: Verifying...`);
+    
+    const parity = await verifier.checkParity(job.analysis, generation.outputDir);
+    updateJob(jobId, { parity });
+    
+    // Record to history
+    if (!job.iterations) job.iterations = [];
+    job.iterations.push({
+      version: iteration,
+      parityScore: parity.overallScore,
+      filesGenerated: generation.files?.length || 0,
+      testsPassed: tests.passed,
+      fixesApplied: job.fixes?.length || 0,
+      completedAt: new Date(),
+      missingFeatures: parity.missingFeatures?.slice(0, 5),
+    });
+    
+    updateProgress(jobId, 'verifying', `Version ${iteration}: ${parity.overallScore}% parity`, 100,
+      parity.passesThreshold ? 'Threshold reached!' : `Missing: ${parity.missingFeatures?.slice(0, 2).join(', ')}`);
+    
+    logger.info(`[${jobId}] Re-iteration ${iteration} complete: ${parity.overallScore}% parity`);
+    
+    // Mark complete (user can iterate again if desired)
+    updateJob(jobId, { status: 'complete' });
+    
+    jobControls.delete(jobId);
+    jobAbortControllers.delete(jobId);
+    
+  } catch (e: any) {
+    if (e.message === 'Cancelled') {
+      logger.info(`[${jobId}] Iteration was cancelled`);
+      updateJob(jobId, { status: 'cancelled', error: 'Cancelled by user' });
+    } else {
+      logger.error(`[${jobId}] Iteration failed: ${e.message}`);
+      updateJob(jobId, { status: 'failed', error: e.message });
+    }
+    jobAbortControllers.delete(jobId);
   }
 }
 
