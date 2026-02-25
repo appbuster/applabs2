@@ -76,6 +76,24 @@ apps/web/
 6. Responsive design
 7. Clean, minimal UI
 
+## Planned Improvements
+
+### Visual Research During Planning (Priority: HIGH)
+**Problem:** Currently visual parity check happens AFTER code generation, wasting cycles.
+**Solution:** During research phase:
+1. Take screenshots of target SaaS (homepage, dashboard, key pages)
+2. Optionally analyze YouTube tutorials/demos to understand UX flow
+3. Feed visual context to Claude BEFORE generating code
+4. This gives the AI a visual reference to build toward from the start
+
+**Implementation:**
+- Use Playwright to capture screenshots during research phase
+- Store screenshots in job artifacts
+- Include screenshot descriptions in the generation prompt
+- Show screenshots in the UI so user can see what's being targeted
+
+---
+
 ## Research Improvements Needed
 
 1. When analyzing "Notion", identify:
