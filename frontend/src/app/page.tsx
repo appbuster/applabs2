@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { Rocket, Loader2, CheckCircle, XCircle, GitBranch, Globe, Database, Code } from 'lucide-react';
 
-const API_URL = process.env.API_URL || 'http://localhost:3003';
+// NEXT_PUBLIC_ prefix required for client-side env vars in Next.js
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://applabs2-api-v2.onrender.com';
 
 interface Job {
   id: string;
