@@ -333,6 +333,7 @@ export class BrowserVerifier {
       // Check if content is still visible and not broken
       const hasContent = await page.$('h1, h2, p, button') !== null;
       const hasOverflow = await page.evaluate(() => {
+        // @ts-ignore - runs in browser context
         return document.body.scrollWidth > window.innerWidth + 20;
       });
 

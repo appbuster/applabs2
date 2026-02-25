@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Rocket, Loader2, CheckCircle, XCircle, GitBranch, Globe, Database, Code } from 'lucide-react';
+import { Rocket, Loader2, CheckCircle, XCircle, GitBranch, Globe, Database, Code, Trash2, StopCircle, Clock } from 'lucide-react';
 
 // NEXT_PUBLIC_ prefix required for client-side env vars in Next.js
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://applabs2-api-v2.onrender.com';
@@ -31,6 +31,16 @@ interface Job {
   error?: string;
   createdAt: string;
   updatedAt: string;
+  iterationCount?: number;
+  maxIterations?: number;
+  progress?: {
+    stage: string;
+    step: string;
+    percentage: number;
+    details?: string;
+    startedAt: string;
+    stages: { name: string; completed: boolean; current: boolean }[];
+  };
 }
 
 export default function Home() {
@@ -41,6 +51,7 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentJob, setCurrentJob] = useState<Job | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   // Poll for job updates
   useEffect(() => {
@@ -88,6 +99,63 @@ export default function Home() {
     }
   }
 
+  async function cancelJob(jobId: string) {
+    if (!confirm('Cancel this job? It will stop processing.')) return;
+    setActionLoading(jobId);
+    try {
+      const res = await fetch(`${API_URL}/api/jobs/${jobId}/cancel`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to cancel');
+      }
+      // Refresh job status
+      const jobRes = await fetch(`${API_URL}/api/jobs/${jobId}`);
+      if (jobRes.ok) {
+        const job = await jobRes.json();
+        setCurrentJob(job);
+      }
+      loadJobs();
+    } catch (e: any) {
+      alert(e.message || 'Failed to cancel job');
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function deleteJob(jobId: string) {
+    if (!confirm('Delete this job? This will also delete the GitHub repo and any deployed services.')) return;
+    setActionLoading(jobId);
+    try {
+      const res = await fetch(`${API_URL}/api/jobs/${jobId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to delete');
+      }
+      const result = await res.json();
+      if (result.errors?.length > 0) {
+        alert(`Deleted with warnings: ${result.errors.join(', ')}`);
+      }
+      // Clear current job if it was deleted
+      if (currentJob?.id === jobId) {
+        setCurrentJob(null);
+      }
+      loadJobs();
+    } catch (e: any) {
+      alert(e.message || 'Failed to delete job');
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  function formatElapsedTime(startTime: string): string {
+    const start = new Date(startTime).getTime();
+    const now = Date.now();
+    const elapsed = Math.floor((now - start) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!saasName.trim()) return;
@@ -128,9 +196,13 @@ export default function Home() {
     generating: 'text-purple-400',
     testing: 'text-cyan-400',
     fixing: 'text-orange-400',
+    verifying: 'text-teal-400',
+    iterating: 'text-violet-400',
     deploying: 'text-indigo-400',
+    paused: 'text-gray-400',
     complete: 'text-green-400',
     failed: 'text-red-400',
+    cancelled: 'text-orange-400',
   };
 
   const statusIcons: Record<string, React.ReactNode> = {
@@ -139,9 +211,13 @@ export default function Home() {
     generating: <Code className="w-5 h-5 animate-pulse" />,
     testing: <CheckCircle className="w-5 h-5 animate-pulse" />,
     fixing: <Loader2 className="w-5 h-5 animate-spin" />,
+    verifying: <CheckCircle className="w-5 h-5 animate-pulse" />,
+    iterating: <Loader2 className="w-5 h-5 animate-spin" />,
     deploying: <Rocket className="w-5 h-5 animate-bounce" />,
+    paused: <StopCircle className="w-5 h-5" />,
     complete: <CheckCircle className="w-5 h-5" />,
     failed: <XCircle className="w-5 h-5" />,
+    cancelled: <StopCircle className="w-5 h-5" />,
   };
 
   return (
@@ -241,13 +317,92 @@ export default function Home() {
         {/* Current Job Status */}
         {currentJob && (
           <div className="bg-gray-800/50 backdrop-blur rounded-2xl p-8 mb-8 border border-gray-700">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="text-2xl font-semibold text-white">Current Job</h2>
-              <div className={`flex items-center gap-2 ${statusColors[currentJob.status]}`}>
-                {statusIcons[currentJob.status]}
-                <span className="capitalize font-medium">{currentJob.status}</span>
+              <div className="flex items-center gap-3">
+                <div className={`flex items-center gap-2 ${statusColors[currentJob.status]}`}>
+                  {statusIcons[currentJob.status]}
+                  <span className="capitalize font-medium">{currentJob.status}</span>
+                </div>
+                {/* Action buttons */}
+                {!['complete', 'failed', 'cancelled'].includes(currentJob.status) && (
+                  <button
+                    onClick={() => cancelJob(currentJob.id)}
+                    disabled={actionLoading === currentJob.id}
+                    className="p-2 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 rounded-lg transition-colors disabled:opacity-50"
+                    title="Cancel job"
+                  >
+                    <StopCircle className="w-5 h-5" />
+                  </button>
+                )}
+                <button
+                  onClick={() => deleteJob(currentJob.id)}
+                  disabled={actionLoading === currentJob.id}
+                  className="p-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg transition-colors disabled:opacity-50"
+                  title="Delete job and artifacts"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
               </div>
             </div>
+
+            {/* Progress Section */}
+            {currentJob.progress && !['complete', 'failed', 'cancelled'].includes(currentJob.status) && (
+              <div className="mb-6 space-y-3">
+                {/* Progress bar */}
+                <div className="relative">
+                  <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-500"
+                      style={{ width: `${Math.max(0, currentJob.progress.percentage)}%` }}
+                    />
+                  </div>
+                  <div className="absolute right-0 -top-6 text-sm text-gray-400">
+                    {currentJob.progress.percentage >= 0 ? `${currentJob.progress.percentage}%` : 'Paused'}
+                  </div>
+                </div>
+                
+                {/* Stage indicators */}
+                <div className="flex justify-between text-xs">
+                  {currentJob.progress.stages?.map((stage, i) => (
+                    <div 
+                      key={i} 
+                      className={`flex flex-col items-center ${
+                        stage.completed ? 'text-green-400' : 
+                        stage.current ? 'text-blue-400' : 'text-gray-600'
+                      }`}
+                    >
+                      <div className={`w-2 h-2 rounded-full mb-1 ${
+                        stage.completed ? 'bg-green-400' : 
+                        stage.current ? 'bg-blue-400 animate-pulse' : 'bg-gray-600'
+                      }`} />
+                      <span className="hidden sm:block">{stage.name}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Current step details */}
+                <div className="flex items-center justify-between text-sm">
+                  <div className="text-gray-300">
+                    <span className="font-medium">{currentJob.progress.step}</span>
+                    {currentJob.progress.details && (
+                      <span className="text-gray-500 ml-2">• {currentJob.progress.details}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 text-gray-500">
+                    <Clock className="w-4 h-4" />
+                    <span>{formatElapsedTime(currentJob.progress.startedAt || currentJob.createdAt)}</span>
+                  </div>
+                </div>
+
+                {/* Iteration counter */}
+                {currentJob.iterationCount && currentJob.maxIterations && (
+                  <div className="text-xs text-gray-500">
+                    Iteration {currentJob.iterationCount} of {currentJob.maxIterations}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-4">
               <div className="flex items-center gap-4 text-gray-300">
@@ -324,19 +479,31 @@ export default function Home() {
               {jobs.map((job) => (
                 <div
                   key={job.id}
-                  onClick={() => setCurrentJob(job)}
-                  className="bg-gray-900/50 rounded-lg p-4 cursor-pointer hover:bg-gray-900/70 transition-colors"
+                  className="bg-gray-900/50 rounded-lg p-4 hover:bg-gray-900/70 transition-colors group"
                 >
                   <div className="flex items-center justify-between">
-                    <div>
+                    <div 
+                      onClick={() => setCurrentJob(job)}
+                      className="cursor-pointer flex-1"
+                    >
                       <span className="text-white font-medium">{job.input.saasName}</span>
                       {job.analysis?.name && (
                         <span className="text-gray-500 ml-2">→ {job.analysis.name}</span>
                       )}
                     </div>
-                    <div className={`flex items-center gap-2 ${statusColors[job.status]}`}>
-                      {statusIcons[job.status]}
-                      <span className="capitalize text-sm">{job.status}</span>
+                    <div className="flex items-center gap-3">
+                      <div className={`flex items-center gap-2 ${statusColors[job.status]}`}>
+                        {statusIcons[job.status]}
+                        <span className="capitalize text-sm">{job.status}</span>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteJob(job.id); }}
+                        disabled={actionLoading === job.id}
+                        className="p-1.5 bg-red-600/10 hover:bg-red-600/30 text-red-400 rounded opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                 </div>
